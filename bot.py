@@ -4,9 +4,7 @@ from telegram.ext import Application, MessageHandler, filters
 import mss
 from PIL import Image
 
-TOKEN = os.getenv("8839915273:AAG-iAMNlAsfY5do3osEOO285kZ9tThBlLc")
-if not TOKEN:
-    raise ValueError("BOT_TOKEN not set")
+TOKEN = "8839915273:AAG-iAMNlAsfY5do3osEOO285kZ9tThBlLc"
 
 DENIED_PATTERNS = [
     r"rm\s+-rf\s+/",
