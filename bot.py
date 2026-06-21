@@ -12,6 +12,7 @@ from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTyp
 
 TOKEN = "8839915273:AAG-iAMNlAsfY5do3osEOO285kZ9tThBlLc"
 OWNER_ID = 297562307
+OWNER_USERNAME = "sgqnu"
 
 BASE_DIR = "/app/data"
 os.makedirs(BASE_DIR, exist_ok=True)
@@ -56,7 +57,6 @@ class TerminalSession:
     def execute(self, command):
         if not self.running:
             return "session closed"
-        # обновляем cwd при cd
         if command.strip().startswith("cd "):
             parts = shlex.split(command)
             if len(parts) == 2:
@@ -67,9 +67,6 @@ class TerminalSession:
                     self.cwd = os.path.normpath(os.path.join(self.cwd, new_path))
                 if not os.path.exists(self.cwd):
                     self.cwd = self.user_dir
-        # если команда длиннее 1000 символов – блокируем
-        if len(command) > 1000 and not command.startswith("cat >"):
-            return "command too long, please upload as file or split into parts"
         os.write(self.master_fd, (command + "\n").encode())
         time.sleep(0.3)
         for _ in range(10):
@@ -90,8 +87,12 @@ class TerminalSession:
         os.close(self.slave_fd)
         self.process.terminate()
 
-def is_owner(user_id):
-    return user_id == OWNER_ID
+def is_owner(user_id, username=None):
+    if user_id != OWNER_ID:
+        return False
+    if username and username.lower() != OWNER_USERNAME.lower():
+        return False
+    return True
 
 async def send_long_message(update, text, max_len=4096):
     if not text:
@@ -107,16 +108,18 @@ async def send_long_message(update, text, max_len=4096):
 
 async def handle_message(update, context):
     user_id = update.effective_user.id
+    username = update.effective_user.username
     text = update.message.text
     if not text:
         return
     cmd = text.strip()
 
-    # команда sendfile
+    if not is_owner(user_id, username):
+        await update.message.reply_text("access denied")
+        logger.warning(f"unauthorized attempt by {user_id} (@{username})")
+        return
+
     if cmd.startswith("sendfile "):
-        if not is_owner(user_id):
-            await update.message.reply_text("no permission")
-            return
         args = shlex.split(cmd)
         if len(args) < 2:
             await update.message.reply_text("usage: sendfile <path>")
@@ -139,17 +142,15 @@ async def handle_message(update, context):
             await update.message.reply_text(f"error: {e}")
         return
 
-    # терминал
     if user_id not in sessions:
         sessions[user_id] = TerminalSession(user_id)
-        await update.message.reply_text(f"term started (cwd: {sessions[user_id].getcwd()})")
 
     session = sessions[user_id]
 
     if cmd == "exit":
         session.close()
         del sessions[user_id]
-        await update.message.reply_text("term closed")
+        await update.message.reply_text("session closed")
         return
 
     if cmd == "ls":
@@ -165,9 +166,12 @@ async def handle_message(update, context):
 
 async def handle_document(update, context):
     user_id = update.effective_user.id
-    if not is_owner(user_id):
-        await update.message.reply_text("no permission")
+    username = update.effective_user.username
+
+    if not is_owner(user_id, username):
+        await update.message.reply_text("access denied")
         return
+
     doc = update.message.document
     if not doc:
         return
@@ -185,10 +189,6 @@ async def handle_document(update, context):
 
 async def error_handler(update, context):
     logger.error(f"error: {context.error}")
-    try:
-        await update.message.reply_text("error occurred")
-    except:
-        pass
 
 def main():
     try:
