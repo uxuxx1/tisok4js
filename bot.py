@@ -57,7 +57,8 @@ async def handle(update, context):
 
 async def take_screenshot():
     try:
-        subprocess.run(['import', '-window', 'root', '/tmp/screenshot.png'], check=True, timeout=5)
+        subprocess.run(['xwd', '-root', '-display', ':99', '-out', '/tmp/screenshot.xwd'], check=True, timeout=5)
+        subprocess.run(['convert', '/tmp/screenshot.xwd', '/tmp/screenshot.png'], check=True, timeout=5)
         with open('/tmp/screenshot.png', 'rb') as f:
             buf = io.BytesIO(f.read())
         buf.seek(0)
