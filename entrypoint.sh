@@ -1,5 +1,8 @@
 #!/bin/sh
-Xvfb :99 -screen 0 1024x768x24 -ac &
-export DISPLAY=:99
-sleep 5
+# установка базовых пакетов
+apt update -qq && apt install -y -qq \
+    curl wget git net-tools htop vim nano \
+    python3-pip python3-dev build-essential \
+    && pip3 install --upgrade pip -q
+# запуск бота
 python3 /app/bot.py
