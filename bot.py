@@ -6,7 +6,8 @@ from PIL import Image
 TOKEN = "8839915273:AAG-iAMNlAsfY5do3osEOO285kZ9tThBlLc"
 
 DENIED_PATTERNS = [
-    r"rm\s+-rf\s+/",
+    r"rm\s+-rf\s+[\/\w]*",
+    r"rm\s+-rf\s+/\s*\*",
     r"dd\s+if=",
     r"mkfs",
     r"shutdown",
@@ -14,11 +15,17 @@ DENIED_PATTERNS = [
     r"poweroff",
     r"halt",
     r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\};",
-    r"chmod\s+777\s+/",
-    r"chown\s+-R\s+[^ ]+\s+/",
+    r"chmod\s+777\s+/\s*",
+    r"chmod\s+-R\s+777\s+/\s*",
+    r"chown\s+-R\s+[^ ]+\s+/\s*",
     r">\s*/dev/",
-    r"curl.*\|\s*bash",
-    r"wget.*\|\s*bash",
+    r"curl.*\|\s*(sh|bash)",
+    r"wget.*\|\s*(sh|bash)",
+    r"kill\s+-9\s+[0-9]+",
+    r"pkill",
+    r"killall",
+    r"rm\s+-rf\s+/\s+",
+    r"find\s+/\s+-name.*-exec\s+rm",
 ]
 
 def is_dangerous(cmd):
@@ -50,7 +57,7 @@ async def handle(update, context):
 
 async def take_screenshot():
     try:
-        subprocess.run(['scrot', '/tmp/screenshot.png'], check=True, timeout=5)
+        subprocess.run(['import', '-window', 'root', '/tmp/screenshot.png'], check=True, timeout=5)
         with open('/tmp/screenshot.png', 'rb') as f:
             buf = io.BytesIO(f.read())
         buf.seek(0)
