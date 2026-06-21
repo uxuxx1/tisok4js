@@ -1,36 +1,90 @@
 import subprocess
 import asyncio
 import logging
+import os
+import pty
+import select
+import threading
+import time
+import shlex
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
 TOKEN = "8839915273:AAG-iAMNlAsfY5do3osEOO285kZ9tThBlLc"
 OWNER_ID = 297562307
 
-ALLOWED_COMMANDS = {
-    'ls', 'pwd', 'whoami', 'date', 'uptime', 'echo', 'cat', 'head', 'tail',
-    'grep', 'find', 'tree', 'df', 'du', 'free', 'ps', 'top', 'htop', 'atop',
-    'netstat', 'ss', 'ping', 'nslookup', 'dig', 'traceroute', 'tracepath',
-    'uname', 'env', 'printenv', 'id', 'groups', 'users', 'w', 'who', 'last',
-    'lastlog', 'history', 'which', 'whereis', 'locate', 'cal', 'ncal', 'bc',
-    'expr', 'factor', 'seq', 'yes', 'base64', 'md5sum', 'sha1sum', 'sha256sum',
-    'wc', 'sort', 'uniq', 'comm', 'diff', 'cmp', 'file', 'stat', 'du'
-}
+BASE_DIR = "/app/data"
+os.makedirs(BASE_DIR, exist_ok=True)
 
-DANGEROUS_COMMANDS = {
-    'rm', 'dd', 'mkfs', 'format', 'shutdown', 'reboot', 'halt', 'poweroff',
-    'kill', 'pkill', 'killall', 'nice', 'renice', 'chmod', 'chown', 'chroot',
-    'mount', 'umount', 'fdisk', 'parted', 'systemctl', 'service', 'apt', 'apt-get',
-    'dpkg', 'rpm', 'yum', 'dnf', 'pacman', 'zypper', 'pip', 'npm', 'gem', 'cpan',
-    'wget', 'curl', 'scp', 'rsync', 'tar', 'gzip', 'gunzip', 'zip', 'unzip',
-    'bzip2', 'xz', '7z', 'rar', 'cp', 'mv', 'ln', 'mkdir', 'rmdir', 'touch',
-    'ln', 'link', 'unlink', 'mknod', 'mkfifo', 'tee', 'xargs', 'eval', 'exec'
-}
-
-FORBIDDEN_CHARS = {';', '&&', '||', '|', '>', '<', '`', '$', '(', ')', '&', '\n', '!', '{', '}', '[', ']', '*', '?', '~'}
-
+sessions = {}
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+class TerminalSession:
+    def __init__(self, user_id):
+        self.user_dir = os.path.join(BASE_DIR, str(user_id))
+        os.makedirs(self.user_dir, exist_ok=True)
+        self.cwd = self.user_dir
+        self.master_fd, self.slave_fd = pty.openpty()
+        self.process = subprocess.Popen(
+            ["/bin/bash"],
+            stdin=self.slave_fd,
+            stdout=self.slave_fd,
+            stderr=self.slave_fd,
+            text=True,
+            bufsize=0,
+            cwd=self.cwd
+        )
+        self.output_buffer = ""
+        self.running = True
+        self.last_activity = time.time()
+        threading.Thread(target=self._reader, daemon=True).start()
+
+    def _reader(self):
+        while self.running:
+            try:
+                r, _, _ = select.select([self.master_fd], [], [], 0.1)
+                if self.master_fd in r:
+                    data = os.read(self.master_fd, 1024).decode('utf-8', errors='ignore')
+                    if data:
+                        self.output_buffer += data
+                        self.last_activity = time.time()
+            except:
+                break
+
+    def execute(self, command):
+        if not self.running:
+            return "session closed"
+        # обновляем cwd при cd
+        if command.strip().startswith("cd "):
+            parts = shlex.split(command)
+            if len(parts) == 2:
+                new_path = parts[1]
+                if os.path.isabs(new_path):
+                    self.cwd = os.path.normpath(new_path)
+                else:
+                    self.cwd = os.path.normpath(os.path.join(self.cwd, new_path))
+                if not os.path.exists(self.cwd):
+                    self.cwd = self.user_dir
+        os.write(self.master_fd, (command + "\n").encode())
+        time.sleep(0.3)
+        for _ in range(10):
+            time.sleep(0.1)
+            if self.output_buffer:
+                break
+        out = self.output_buffer
+        self.output_buffer = ""
+        self.last_activity = time.time()
+        return out
+
+    def getcwd(self):
+        return self.cwd
+
+    def close(self):
+        self.running = False
+        os.close(self.master_fd)
+        os.close(self.slave_fd)
+        self.process.terminate()
 
 def is_owner(user_id):
     return user_id == OWNER_ID
@@ -47,51 +101,105 @@ async def send_long_message(update, text, max_len=4096):
             await update.message.reply_text(part)
             await asyncio.sleep(0.1)
 
-def is_allowed_command(cmd):
-    if not cmd:
-        return False
-    first_word = cmd.split()[0] if cmd.split() else ''
-    if first_word not in ALLOWED_COMMANDS:
-        return False
-    if any(char in cmd for char in FORBIDDEN_CHARS):
-        return False
-    return True
-
-def is_dangerous(cmd):
-    first_word = cmd.split()[0] if cmd.split() else ''
-    if first_word in DANGEROUS_COMMANDS:
-        return True
-    if 'rm -rf' in cmd or 'rm -fr' in cmd or 'dd if' in cmd or 'mkfs' in cmd:
-        return True
-    return False
-
 async def handle_message(update, context):
     user_id = update.effective_user.id
-    cmd = update.message.text.strip()
-    if not cmd:
+    text = update.message.text
+    if not text:
+        return
+    cmd = text.strip()
+
+    if cmd == "screenshottt":
+        if not is_owner(user_id):
+            await update.message.reply_text("no permission")
+            return
+        await take_screenshot(update)
         return
 
-    if not is_owner(user_id):
-        if not is_allowed_command(cmd):
-            await update.message.reply_text("you have no permission")
+    if cmd.startswith("sendfile "):
+        if not is_owner(user_id):
+            await update.message.reply_text("no permission")
             return
-        if is_dangerous(cmd):
-            await update.message.reply_text("this command is forbidden for you")
+        args = shlex.split(cmd)
+        if len(args) < 2:
+            await update.message.reply_text("usage: sendfile <path>")
             return
-    else:
-        if is_dangerous(cmd):
-            await update.message.reply_text("warning: dangerous command, but executing anyway")
+        file_path = args[1]
+        if not os.path.isabs(file_path):
+            session = sessions.get(user_id)
+            if session:
+                file_path = os.path.normpath(os.path.join(session.getcwd(), file_path))
+        if not os.path.exists(file_path):
+            await update.message.reply_text("file not found")
+            return
+        if os.path.isdir(file_path):
+            await update.message.reply_text("is a directory")
+            return
+        try:
+            with open(file_path, "rb") as f:
+                await update.message.reply_document(document=f, filename=os.path.basename(file_path))
+        except Exception as e:
+            await update.message.reply_text(f"error: {e}")
+        return
+
+    # терминал
+    if user_id not in sessions:
+        sessions[user_id] = TerminalSession(user_id)
+        await update.message.reply_text(f"term started (cwd: {sessions[user_id].getcwd()})")
+
+    session = sessions[user_id]
+
+    if cmd == "exit":
+        session.close()
+        del sessions[user_id]
+        await update.message.reply_text("term closed")
+        return
+
+    if cmd == "ls":
+        cmd = "ls /"
 
     try:
-        result = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, timeout=30, text=True)
-    except subprocess.CalledProcessError as e:
-        result = e.output
-    except subprocess.TimeoutExpired:
-        result = "timeout (30s)"
+        result = session.execute(cmd)
+        if not result.strip():
+            result = "(no output)"
+        await send_long_message(update, f"$ {cmd}\n\n{result}")
     except Exception as e:
-        result = str(e)
+        await update.message.reply_text(f"error: {e}")
 
-    await send_long_message(update, f"$ {cmd}\n\n{result}")
+async def handle_document(update, context):
+    user_id = update.effective_user.id
+    if not is_owner(user_id):
+        await update.message.reply_text("no permission")
+        return
+    doc = update.message.document
+    if not doc:
+        return
+    if user_id not in sessions:
+        sessions[user_id] = TerminalSession(user_id)
+    session = sessions[user_id]
+    save_dir = session.getcwd()
+    file_path = os.path.join(save_dir, doc.file_name)
+    try:
+        file = await doc.get_file()
+        await file.download_to_drive(file_path)
+        await update.message.reply_text(f"file saved: {file_path}")
+    except Exception as e:
+        await update.message.reply_text(f"error: {e}")
+
+async def take_screenshot(update):
+    try:
+        subprocess.check_call(["which", "scrot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except:
+        await update.message.reply_text("installing scrot...")
+        subprocess.check_call(["apt", "update", "-qq"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.check_call(["apt", "install", "-y", "-qq", "scrot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    tmp_file = "/tmp/screenshot.png"
+    try:
+        subprocess.check_call(["scrot", tmp_file], timeout=10)
+        with open(tmp_file, "rb") as f:
+            await update.message.reply_photo(photo=f)
+        os.unlink(tmp_file)
+    except Exception as e:
+        await update.message.reply_text(f"screenshot error: {e}")
 
 async def error_handler(update, context):
     logger.error(f"error: {context.error}")
@@ -103,6 +211,7 @@ async def error_handler(update, context):
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_error_handler(error_handler)
     logger.info("bot started")
     app.run_polling()
