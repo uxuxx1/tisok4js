@@ -1,74 +1,23 @@
-import os, io, subprocess, re
+import subprocess
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters
-from PIL import Image
 
 TOKEN = "8839915273:AAG-iAMNlAsfY5do3osEOO285kZ9tThBlLc"
 
-DENIED_PATTERNS = [
-    r"rm\s+-rf\s+[\/\w]*",
-    r"rm\s+-rf\s+/\s*\*",
-    r"dd\s+if=",
-    r"mkfs",
-    r"shutdown",
-    r"reboot",
-    r"poweroff",
-    r"halt",
-    r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\};",
-    r"chmod\s+777\s+/\s*",
-    r"chmod\s+-R\s+777\s+/\s*",
-    r"chown\s+-R\s+[^ ]+\s+/\s*",
-    r">\s*/dev/",
-    r"curl.*\|\s*(sh|bash)",
-    r"wget.*\|\s*(sh|bash)",
-    r"kill\s+-9\s+[0-9]+",
-    r"pkill",
-    r"killall",
-    r"rm\s+-rf\s+/\s+",
-    r"find\s+/\s+-name.*-exec\s+rm",
-]
-
-def is_dangerous(cmd):
-    for p in DENIED_PATTERNS:
-        if re.search(p, cmd, re.IGNORECASE):
-            return True
-    return False
-
-async def handle(update, context):
+async def handle(update: Update, context):
     cmd = update.message.text.strip()
     if not cmd:
         return
-    if is_dangerous(cmd):
-        buf = await take_screenshot()
-        await update.message.reply_photo(buf, caption="команда запрещена")
-        return
     try:
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10, executable="/bin/sh", cwd='/')
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30, executable="/bin/sh", cwd='/')
         out = res.stdout + res.stderr
         if not out:
             out = "(пустой вывод)"
     except subprocess.TimeoutExpired:
-        out = "таймаут 10с"
+        out = "таймаут 30с"
     except Exception as e:
         out = f"ошибка: {e}"
-    buf = await take_screenshot()
-    caption = f"команда: {cmd}\nвывод:\n{out[:700]}"
-    await update.message.reply_photo(buf, caption=caption)
-
-async def take_screenshot():
-    try:
-        subprocess.run(['xwd', '-root', '-display', ':99', '-out', '/tmp/screenshot.xwd'], check=True, timeout=5)
-        subprocess.run(['convert', '/tmp/screenshot.xwd', '/tmp/screenshot.png'], check=True, timeout=5)
-        with open('/tmp/screenshot.png', 'rb') as f:
-            buf = io.BytesIO(f.read())
-        buf.seek(0)
-        return buf
-    except:
-        img = Image.new("RGB", (800, 600), color="red")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        buf.seek(0)
-        return buf
+    await update.message.reply_text(f"$ {cmd}\n\n{out[:4000]}")
 
 def main():
     app = Application.builder().token(TOKEN).build()
