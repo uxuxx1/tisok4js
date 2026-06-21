@@ -33,7 +33,8 @@ class TerminalSession:
             stderr=self.slave_fd,
             text=True,
             bufsize=0,
-            cwd=self.cwd
+            cwd=self.cwd,
+            env=os.environ.copy()
         )
         self.output_buffer = ""
         self.running = True
@@ -45,11 +46,11 @@ class TerminalSession:
             try:
                 r, _, _ = select.select([self.master_fd], [], [], 0.1)
                 if self.master_fd in r:
-                    data = os.read(self.master_fd, 1024).decode('utf-8', errors='ignore')
+                    data = os.read(self.master_fd, 4096).decode('utf-8', errors='ignore')
                     if data:
                         self.output_buffer += data
                         self.last_activity = time.time()
-            except:
+            except Exception:
                 break
 
     def execute(self, command):
@@ -66,6 +67,9 @@ class TerminalSession:
                     self.cwd = os.path.normpath(os.path.join(self.cwd, new_path))
                 if not os.path.exists(self.cwd):
                     self.cwd = self.user_dir
+        # если команда длиннее 1000 символов – блокируем
+        if len(command) > 1000 and not command.startswith("cat >"):
+            return "command too long, please upload as file or split into parts"
         os.write(self.master_fd, (command + "\n").encode())
         time.sleep(0.3)
         for _ in range(10):
@@ -108,13 +112,7 @@ async def handle_message(update, context):
         return
     cmd = text.strip()
 
-    if cmd == "screenshottt":
-        if not is_owner(user_id):
-            await update.message.reply_text("no permission")
-            return
-        await take_screenshot(update)
-        return
-
+    # команда sendfile
     if cmd.startswith("sendfile "):
         if not is_owner(user_id):
             await update.message.reply_text("no permission")
@@ -185,22 +183,6 @@ async def handle_document(update, context):
     except Exception as e:
         await update.message.reply_text(f"error: {e}")
 
-async def take_screenshot(update):
-    try:
-        subprocess.check_call(["which", "scrot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except:
-        await update.message.reply_text("installing scrot...")
-        subprocess.check_call(["apt", "update", "-qq"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.check_call(["apt", "install", "-y", "-qq", "scrot"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    tmp_file = "/tmp/screenshot.png"
-    try:
-        subprocess.check_call(["scrot", tmp_file], timeout=10)
-        with open(tmp_file, "rb") as f:
-            await update.message.reply_photo(photo=f)
-        os.unlink(tmp_file)
-    except Exception as e:
-        await update.message.reply_text(f"screenshot error: {e}")
-
 async def error_handler(update, context):
     logger.error(f"error: {context.error}")
     try:
@@ -209,12 +191,15 @@ async def error_handler(update, context):
         pass
 
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    app.add_error_handler(error_handler)
-    logger.info("bot started")
-    app.run_polling()
+    try:
+        app = ApplicationBuilder().token(TOKEN).build()
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+        app.add_error_handler(error_handler)
+        logger.info("bot started")
+        app.run_polling()
+    except Exception as e:
+        logger.critical(f"failed to start: {e}")
 
 if __name__ == "__main__":
     main()
